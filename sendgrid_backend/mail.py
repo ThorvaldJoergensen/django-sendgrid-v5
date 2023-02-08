@@ -14,8 +14,8 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.core.mail.backends.base import BaseEmailBackend
-from python_http_client.exceptions import HTTPError
-from sendgrid import SendGridAPIClient
+from python_http_client.exceptions import HTTPError,
+from sendgrid import SendGridAPIClient,
 from sendgrid.helpers.mail import (
     Attachment,
     Category,
@@ -84,23 +84,17 @@ class SendgridBackend(BaseEmailBackend):
             )
 
         # Configure sandbox mode based on settings
-        sandbox_mode_in_debug = get_django_setting(
-            "SENDGRID_SANDBOX_MODE_IN_DEBUG", True
-        )
+        sandbox_mode_in_debug = get_django_setting("SENDGRID_SANDBOX_MODE_IN_DEBUG", True)
         self.sandbox_mode = bool(settings.DEBUG) and bool(sandbox_mode_in_debug)
 
         if self.sandbox_mode:
-            warnings.warn(
-                "Sendgrid email backend is in sandbox mode!  Emails will not be delivered."
-            )
+            warnings.warn("Sendgrid email backend is in sandbox mode!  Emails will not be delivered.")
 
         # Configure open & click tracking settings, which apply to all emails
         # sent from this backend.
         self.track_email = get_django_setting("SENDGRID_TRACK_EMAIL_OPENS", True)
         self.track_clicks_html = get_django_setting("SENDGRID_TRACK_CLICKS_HTML", True)
-        self.track_clicks_plain = get_django_setting(
-            "SENDGRID_TRACK_CLICKS_PLAIN", True
-        )
+        self.track_clicks_plain = get_django_setting("SENDGRID_TRACK_CLICKS_PLAIN", True)
 
         # Configure echoing sent email messages to stdout (or another stream)
         # for debugging purposes.
@@ -120,9 +114,7 @@ class SendgridBackend(BaseEmailBackend):
 
         msg = message.message()
         msg_data = msg.as_bytes()
-        charset = (
-            msg.get_charset().get_output_charset() if msg.get_charset() else "utf-8"
-        )
+        charset = msg.get_charset().get_output_charset() if msg.get_charset() else "utf-8"
         msg_data = msg_data.decode(charset)
         stream.write("%s\n" % msg_data)
         stream.write("-" * 79)
@@ -148,6 +140,34 @@ class SendgridBackend(BaseEmailBackend):
             except Exception:
                 if not self.fail_silently:
                     raise
+
+    def send_message(self, email_message: EmailMessage) -> EmailMessage:
+        """
+        Sends an EmailMessage object via Sendgrid's HTTP API.
+        Returns the response from the API.
+        """
+        data = self._build_sg_mail(email_message)
+
+        fail_flag = True
+        resp = None
+        try:
+            resp = self.sg.client.mail.send.post(request_body=data)
+            email_message.extra_headers["status"] = resp.status_code
+            x_message_id = resp.headers.get("x-message-id", None)
+            if x_message_id:
+                email_message.extra_headers["message_id"] = x_message_id
+            else:
+                logger.warning("No x_message_id header received from sendgrid api")
+            fail_flag = False
+        except HTTPError as e:
+            message = getattr(e, "body", None)
+            logger.error("Failed to send email, error: %s, response body: %s" % (e, message))
+            if not self.fail_silently:
+                raise
+        finally:
+            sendgrid_email_sent.send(sender=self.__class__, message=email_message, fail_flag=fail_flag)
+        print(f"{resp=}")
+        return email_message
 
     def send_messages(self, email_messages: Iterable[EmailMessage]) -> int:
         """
@@ -175,15 +195,11 @@ class SendgridBackend(BaseEmailBackend):
                 fail_flag = False
             except HTTPError as e:
                 message = getattr(e, "body", None)
-                logger.error(
-                    "Failed to send email, error: %s, response body: %s" % (e, message)
-                )
+                logger.error("Failed to send email, error: %s, response body: %s" % (e, message))
                 if not self.fail_silently:
                     raise
             finally:
-                sendgrid_email_sent.send(
-                    sender=self.__class__, message=msg, fail_flag=fail_flag
-                )
+                sendgrid_email_sent.send(sender=self.__class__, message=msg, fail_flag=fail_flag)
         return success
 
     def _create_sg_attachment(self, django_attch: DjangoAttachment) -> Attachment:
@@ -281,9 +297,7 @@ class SendgridBackend(BaseEmailBackend):
 
         if existing_personalizations is None:
             if not to:
-                raise ValueError(
-                    "Either msg.to or msg.personalizations (with recipients) must be set"
-                )
+                raise ValueError("Either msg.to or msg.personalizations (with recipients) must be set")
 
             personalization = Personalization()
             for addr in to:
@@ -336,14 +350,10 @@ class SendgridBackend(BaseEmailBackend):
                 for k, v in getattr(msg, "substitutions", {}).items():
                     personalization.add_substitution(Substitution(k, v))
 
-            dtd = personalization.dynamic_template_data or getattr(
-                msg, "dynamic_template_data", None
-            )
+            dtd = personalization.dynamic_template_data or getattr(msg, "dynamic_template_data", None)
             if dtd:
                 if SENDGRID_5:
-                    logger.warning(
-                        "dynamic_template_data not available in sendgrid version < 6"
-                    )
+                    logger.warning("dynamic_template_data not available in sendgrid version < 6")
                 else:
                     personalization.dynamic_template_data = dtd
 
@@ -368,11 +378,7 @@ class SendgridBackend(BaseEmailBackend):
 
         if hasattr(msg, "ip_pool_name"):
             if not isinstance(msg.ip_pool_name, str):
-                raise ValueError(
-                    "ip_pool_name must be a str, got: {}; ".format(
-                        type(msg.ip_pool_name)
-                    )
-                )
+                raise ValueError("ip_pool_name must be a str, got: {}; ".format(type(msg.ip_pool_name)))
 
             # Validate ip_pool_name length before attempting to add
             if not 2 <= len(msg.ip_pool_name) <= 64:
@@ -392,10 +398,7 @@ class SendgridBackend(BaseEmailBackend):
             if mail.reply_to:
                 # If this code path is triggered, the reply_to on the sg mail was set in a header above
                 reply_to = Email(*self._parse_email_address(msg.reply_to[0]))
-                if (
-                    reply_to.email != mail.reply_to.email
-                    or reply_to.name != mail.reply_to.name
-                ):
+                if reply_to.email != mail.reply_to.email or reply_to.name != mail.reply_to.name:
                     raise ValueError(
                         "Sendgrid only allows 1 email in the reply-to field.  "
                         + "Reply-To header value != reply_to property value."
@@ -403,9 +406,7 @@ class SendgridBackend(BaseEmailBackend):
 
             if not isinstance(msg.reply_to, str):
                 if len(msg.reply_to) > 1:
-                    raise ValueError(
-                        "Sendgrid only allows 1 email in the reply-to field"
-                    )
+                    raise ValueError("Sendgrid only allows 1 email in the reply-to field")
                 mail.reply_to = Email(*self._parse_email_address(msg.reply_to[0]))
             else:
                 mail.reply_to = Email(*self._parse_email_address(msg.reply_to))
@@ -502,9 +503,7 @@ class SendgridBackend(BaseEmailBackend):
             tracking_settings.open_tracking = OpenTracking(self.track_email)
 
         if tracking_settings.click_tracking is None:
-            tracking_settings.click_tracking = ClickTracking(
-                self.track_clicks_html, self.track_clicks_plain
-            )
+            tracking_settings.click_tracking = ClickTracking(self.track_clicks_html, self.track_clicks_plain)
 
         mail.tracking_settings = tracking_settings
 
